@@ -24,6 +24,37 @@ node ('jenkins') {
 
   stage('checkout') {
     sh "echo checkout stage"
+    
+    config = defaultConfig + [branch: env.BRANCH_NAME, tag: env.TAG_NAME, force: true]
+
+    config.hash = checkout(scm).GIT_COMMIT
+    config.shortHash = sh(returnStdout: true, script: "git rev-parse --short ${config.hash}").trim()
+
+    if (params.confirm) { // manually parametrized job
+      config << params
+      config << [
+        deploy_tag: params.deploy_tag ? normalize(text: params.deploy_tag, dot: false, cut: false) : config.shortHash,
+        host: config.host == '' ? normalize(text: config.branch) : params.host,
+        target: config.target == 'custom namespace' ? params.custom_namespace : config.target,
+        custom_namespace_target: true
+      ]
+
+    } else if (config.tag) { // automatic run for git tag 
+      config.tag = normalize(text: config.tag, dot: false, cut: false)
+      config << [lint: false, test: false, build: false]
+      config << [deploy: true, deploy_tag: config.tag, target: 'preproduction']
+
+    } else if (config.branch == 'master') { // automatic run for master
+      config.tag = normalize(text: 'latest', dot: false, cut: false)
+      config << [deploy: true, deploy_tag: config.shortHash, target: 'staging']
+
+    } else if (config.branch.toLowerCase().startsWith('release')) { // automatic run for release branches
+      config << [deploy: true, deploy_tag: config.shortHash, target: 'preproduction']
+    }
+
+    unstable = false
+    env.GIT_COMMIT = config.hash
+    
 
     echo """
     =====================================================                                                
@@ -89,4 +120,17 @@ node ('jenkins') {
 
 def skipStage() {
   return Utils.markStageSkippedForConditional(STAGE_NAME)
+}
+
+def normalize(Map args) {
+  def options = [text: '', slash: true, dot: true, cut: true, lower: true] + args
+  
+  result = "${options.text}"
+  
+  if (options.slash) result = result.replaceAll('/', '-')
+  if (options.dot) result = result.replaceAll('\\.', '-')
+  if (options.cut) result = sh (script: "echo \"${result}\" | cut -d '-' -f1,2,3", returnStdout: true).trim()
+  if (options.lower) result = result.toLowerCase()
+  
+  return result
 }
